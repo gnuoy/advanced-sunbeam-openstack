@@ -91,6 +91,13 @@ class OSBaseOperatorCharm(ops.charm.CharmBase):
                 db_svc,
                 self.configure_charm)
             handlers.append(self.db)
+        if self.can_add_handler('shared-db', handlers):
+            self.db = sunbeam_rhandlers.SharedDBHandler(
+                self,
+                'shared-db',
+                [self.service_name],
+                self.configure_charm)
+            handlers.append(self.db)
         if self.can_add_handler('ingress', handlers):
             self.ingress = sunbeam_rhandlers.IngressHandler(
                 self,

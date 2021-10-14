@@ -25,6 +25,7 @@ import ops.charm
 import charms.nginx_ingress_integrator.v0.ingress as ingress
 import charms.mysql.v1.mysql as mysql
 import charms.sunbeam_rabbitmq_operator.v0.amqp as sunbeam_amqp
+import charms.sunbeam_mysql_k8s.v0.shared_db as sunbeam_shared_db
 import charms.sunbeam_identity_service_operator.v0.identity_service \
     as sunbeam_id_svc
 import advanced_sunbeam_openstack.interfaces as sunbeam_interfaces
@@ -133,6 +134,78 @@ class IngressHandler(RelationHandler):
 
     def context(self):
         return {}
+
+
+class SharedDBHandler(RelationHandler):
+    """Handler for DB relations"""
+
+    def __init__(self, charm: ops.charm.CharmBase,
+                 relation_name: str,
+                 databases: list,
+                 callback_f: Callable):
+        self.databases = databases
+        super().__init__(charm, relation_name, callback_f)
+
+    def setup_event_handler(self) -> ops.charm.Object:
+        """Configure event handlers for a MySQL relation."""
+        logger.debug('Setting up DB event handler')
+        db = sunbeam_shared_db.SharedDBRequires(
+            self.charm,
+            self.relation_name,
+            self.databases)
+        _rname = self.relation_name.replace('-', '_')
+        db_relation_event = getattr(
+            self.charm.on,
+            f'{_rname}_relation_changed')
+        self.framework.observe(db_relation_event,
+                               self._on_database_changed)
+        return db
+
+    def _on_database_changed(self, event) -> None:
+        """Handles database change events."""
+        databases = self.interface.databases()
+        logger.info(f'Received databases: {databases}')
+
+        if not databases:
+            logger.info('Requesting a new database...')
+            # The mysql-k8s operator creates a database using the relation
+            # information in the form of:
+            #   db_{relation_id}_{partial_uuid}_{name_suffix}
+            # where name_suffix defaults to "". Specify it to the name of the
+            # current app to make it somewhat understandable as to what this
+            # database actually is for.
+            # NOTE(wolsen): database name cannot contain a '-'
+            name_suffix = self.charm.app.name.replace('-', '_')
+            self.interface.new_database(name_suffix=name_suffix)
+            return
+        credentials = self.interface.credentials()
+        # XXX Lets not log the credentials
+        logger.info(f'Received credentials: {credentials}')
+        self.callback_f(event)
+
+    @property
+    def ready(self) -> bool:
+        """Handler ready for use."""
+        try:
+            # Nothing to wait for
+            return bool(self.interface.databases())
+        except AttributeError:
+            return False
+
+    def context(self):
+        try:
+            databases = self.interface.databases()
+        except AttributeError:
+            return {}
+        if not databases:
+            return {}
+        ctxt = {
+            'database': self.interface.databases()[0],
+            'database_host': self.interface.credentials().get('address'),
+            'database_password': self.interface.credentials().get('password'),
+            'database_user': self.interface.credentials().get('username'),
+            'database_type': 'mysql+pymysql'}
+        return ctxt
 
 
 class DBHandler(RelationHandler):
